@@ -1,36 +1,116 @@
 import streamlit as st
+import requests
+import pandas as pd
+from urllib.parse import unquote
 
-st.set_page_config(page_title="최종 링크 테스트", page_icon="🔗")
-st.title("🔗 API 접속 주소 생성기")
-st.info("아래에 키를 넣고 생성된 파란 링크를 클릭해보세요. 하얀 화면에 글자가 쫙 뜨면 성공입니다!")
+# ==========================================
+# 1. 화면 설정
+# ==========================================
+st.set_page_config(page_title="PBB 현황판(전체운항)", page_icon="🛫")
+st.title("🛫 PBB 출발 현황 (All Flight)")
+st.caption("선생님의 키(전체 운항 현황)에 맞춘 전용 버전입니다.")
 
-# 1. 키 입력 (그냥 복사한 그대로 넣으세요)
-api_key = st.text_input("공공데이터포털 인증키를 붙여넣으세요", value="")
-
-if api_key:
-    # 2. 테스트 링크 생성 (서버가 좋아하는 형태로 조립)
+# ==========================================
+# 2. 설정 메뉴
+# ==========================================
+with st.sidebar:
+    st.header("설정")
+    # 키 입력
+    api_key_input = st.text_input("인증키를 입력하세요", type="password")
     
-    # [시도 1] 상세 조회 (Odp) API + 입력한 키 그대로
-    url_1 = f"http://apis.data.go.kr/B551177/StatusOfPassengerFlightsOdp/getPassengerDeparturesOdp?serviceKey={api_key}&type=json&terminalId=P01&numOfRows=5&pageNo=1"
+    st.subheader("게이트 선택")
+    # 게이트 입력
+    gate_input = st.text_input("게이트 번호 (쉼표로 구분)", value="10, 105, 230")
     
-    # [시도 2] 일반 조회 API + 입력한 키 그대로
-    url_2 = f"http://apis.data.go.kr/B551177/StatusOfPassengerFlights/getPassengerDepartures?serviceKey={api_key}&type=json&terminalId=P01&numOfRows=5&pageNo=1"
+    if st.button("새로고침"):
+        st.rerun()
 
-    st.markdown("---")
-    st.write("👇 **아래 링크를 하나씩 클릭해보세요.**")
-
-    # 링크 1
-    st.markdown(f"### [1번 링크: 상세 조회 (Odp) 테스트]({url_1})")
-    st.caption("위 파란 글씨를 클릭하세요. 새 창에서 { ... } 데이터가 보이면 이게 정답입니다.")
+# ==========================================
+# 3. 데이터 가져오기 (전체 운항 현황 API 사용)
+# ==========================================
+def get_flight_data(key_input, gate_input_str):
+    # 1. 키 보정 (자동으로 인코딩/디코딩 처리)
+    real_key = unquote(key_input)
     
-    st.markdown("<br>", unsafe_allow_html=True) # 줄바꿈
+    # 2. 선생님이 찾으신 그 주소! (전체 운항 현황 - 출발)
+    # 보통 오퍼레이션 이름은 getStatusOfAllFltDeOdp 입니다.
+    url = "http://apis.data.go.kr/B551177/statusOfAllFltDeOdp/getStatusOfAllFltDeOdp"
+    
+    target_gates = [g.strip() for g in gate_input_str.split(',') if g.strip()]
+    all_flights = []
 
-    # 링크 2
-    st.markdown(f"### [2번 링크: 일반 조회 테스트]({url_2})")
-    st.caption("만약 1번이 에러나면 이걸 클릭해보세요.")
+    # 터미널 전체 조회 (T1, 탑승동, T2)
+    # 전체 운항 현황 API는 터미널 ID가 다를 수 있어 P01, P02, P03을 순회합니다.
+    terminals = {'T1': 'P01', '탑승동': 'P02', 'T2': 'P03'}
+    
+    for t_name, t_code in terminals.items():
+        params = {
+            "serviceKey": real_key,
+            "type": "json",
+            "searchTerminalId": t_code, # 여긴 파라미터 이름이 searchTerminalId 일 수 있음 (혹은 terminalId)
+            "numOfRows": "100",
+            "pageNo": "1"
+        }
+        
+        # 파라미터 이름이 API마다 달라서 두 가지 방식으로 다 찔러봅니다.
+        # 시도 A: terminalId
+        try:
+            params['terminalId'] = t_code
+            response = requests.get(url, params=params, timeout=5)
+            data = response.json()
+            items = data['response']['body']['items']
+            if not isinstance(items, list): items = [items]
+            
+            for item in items:
+                if str(item.get('gate')) in target_gates:
+                    item['terminal_name'] = t_name
+                    all_flights.append(item)
+        except:
+            pass
 
-    st.markdown("---")
-    st.warning("🚨 **클릭했을 때 화면에 뭐라고 뜨나요?**")
-    st.text("성공 예시: {\"response\":{\"header\":{\"resultCode\":\"00\"} ...")
-    st.text("실패 예시: <OpenAPI_ServiceResponse> ... SERVICE_KEY_IS_NOT_REGISTERED ...")
-    st.text("실패 예시: 500 Internal Server Error (흰 화면)")
+    return pd.DataFrame(all_flights) if all_flights else pd.DataFrame()
+
+# ==========================================
+# 4. 화면 출력
+# ==========================================
+if not api_key_input:
+    st.warning("사이드바에 인증키를 입력해주세요.")
+else:
+    with st.spinner('전체 운항 데이터 조회 중...'):
+        df = get_flight_data(api_key_input, gate_input)
+    
+    if df.empty:
+        st.error("데이터가 안 나옵니다. (가능성: 게이트에 비행기가 없거나, 키 등록 대기중)")
+        st.info("혹시 모르니 아래 링크를 클릭해서 데이터가 뜨는지 확인해보세요.")
+        
+        # 직접 확인용 링크 생성
+        real_key = unquote(api_key_input)
+        test_link = f"http://apis.data.go.kr/B551177/statusOfAllFltDeOdp/getStatusOfAllFltDeOdp?serviceKey={real_key}&type=json&numOfRows=10&pageNo=1"
+        st.markdown(f"[👉 클릭해서 외계어(데이터)가 나오는지 확인하기]({test_link})")
+        
+    else:
+        st.success(f"성공! {len(df)}개의 비행편을 찾았습니다.")
+        df = df.sort_values(by='scheduleDateTime')
+        
+        for index, row in df.iterrows():
+            # 데이터 추출
+            time_str = str(row.get('scheduleDateTime', ''))
+            f_time = f"{time_str[8:10]}:{time_str[10:12]}" if len(time_str) >= 12 else "미정"
+            remark = row.get('remark', '대기')
+            flight_no = row.get('flightId', '')
+            airline = row.get('airline', '')
+            dest = row.get('airport', '')
+            gate = row.get('gate', '?')
+            
+            # 색상 (출발 전용)
+            color = "#e7f5ff" # 파랑(기본)
+            emoji = "🛫"
+            if "탑승" in remark: 
+                color = "#d4edda" # 초록
+                emoji = "🟢"
+            elif "마감" in remark:
+                color = "#f8d7da" # 빨강
+                emoji = "🔴"
+
+            st.markdown(f"""
+            <div style="padding:15px; border-radius:10px; margin-bottom:10px; background-color:{color}; border:1px solid
