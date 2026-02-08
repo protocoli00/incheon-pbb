@@ -1,72 +1,81 @@
 import streamlit as st
 import requests
 import pandas as pd
-from urllib.parse import unquote, quote
+from urllib.parse import unquote
 from datetime import datetime
+import pytz # 한국 시간 계산용
 
 # ==========================================
 # 1. 화면 설정
 # ==========================================
-st.set_page_config(page_title="PBB 현황판", page_icon="🛫", layout="centered")
-st.title("🛫 PBB 현황판 (안정화)")
-st.caption("서버 오류(500) 해결을 위해 데이터 요청량을 조절했습니다.")
+st.set_page_config(page_title="PBB 현황판", page_icon="🕰️", layout="centered")
+
+# 한국 시간(KST) 구하기
+KST = pytz.timezone('Asia/Seoul')
+now_kst = datetime.now(KST)
+time_str = now_kst.strftime("%H:%M:%S") # 시:분:초
+date_str = now_kst.strftime("%Y년 %m월 %d일")
+
+# 타이틀과 시계 배치
+st.title("🛫 PBB 현황판")
+st.markdown(f"""
+<div style="
+    text-align: center; 
+    background-color: #f0f2f6; 
+    padding: 10px; 
+    border-radius: 10px; 
+    margin-bottom: 20px; 
+    border: 2px solid #dfe2e5;">
+    <div style="font-size: 16px; color: #555;">{date_str}</div>
+    <div style="font-size: 40px; font-weight: bold; color: #333; font-family: monospace;">{time_str}</div>
+    <div style="font-size: 12px; color: #888;">(새로고침 기준 실시간)</div>
+</div>
+""", unsafe_allow_html=True)
 
 # ==========================================
 # 2. 사이드바 설정
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 설정")
-    # API 키 입력
     api_key_input = st.text_input("인증키 입력", type="password")
     
-    # 💡 해결사 스위치 추가
-    use_encoding = st.checkbox("데이터가 안 나오면 체크하세요 (키 변환)", value=False)
+    # 500 에러 해결사 (키 타입 변경)
+    use_encoding = st.checkbox("데이터 안 나오면 체크(키 변환)", value=False)
     
-    # 터미널 (T1 기본)
     st.subheader("터미널")
     terminal_options = {'T1': 'P01', '탑승동': 'P02', 'T2': 'P03'}
     selected_terminals = st.multiselect("구역", list(terminal_options.keys()), default=['T1'])
     
-    # 게이트
     st.subheader("게이트")
     gate_input = st.text_input("번호 (비워두면 전체)", value="")
     
-    if st.button("새로고침"):
+    # 버튼 누르면 재실행 (시간도 갱신됨)
+    if st.button("새로고침 (시간갱신)"):
         st.rerun()
 
 # ==========================================
-# 3. 카운터 변환 함수
+# 3. 카운터 변환 함수 (H1/H2)
 # ==========================================
 def format_counter(text):
     if not text or text == "-" or text == "None": return "-"
     try:
-        # 데이터 정제 (예: H01-H18)
         start_code = text.split('-')[0].strip()
         alpha = start_code[0] # H
         number = int(start_code[1:]) # 1
-        
-        # 1~18번은 1구역, 19번부터는 2구역
         suffix = "1" if number <= 18 else "2"
         return f"{alpha}{suffix} 카운터"
     except:
         return text
 
 # ==========================================
-# 4. 데이터 로직 (500 에러 방지)
+# 4. 데이터 로직 (안정화 버전)
 # ==========================================
 def get_flight_data(key_input, gate_input_str, terminals_to_check, use_enc):
     if not key_input: return pd.DataFrame(), None
 
-    # [중요] 키 처리 로직 선택
-    if use_enc:
-        # 체크박스 ON: 인코딩된 키라고 가정하고 그대로 사용하거나 다시 인코딩
-        # (보통 Decoding키를 넣고 이 옵션을 켜면 에러가 해결될 때가 있음)
-        real_key = key_input 
-    else:
-        # 체크박스 OFF: Decoding(일반) 모드 (기본값)
-        real_key = unquote(key_input)
-
-    today_str = datetime.now().strftime("%Y%m%d")
+    # 키 보정 로직
+    real_key = key_input if use_enc else unquote(key_input)
+    today_str = datetime.now(KST).strftime("%Y%m%d") # 한국 날짜
     
     target_gates = []
     if gate_input_str.strip():
@@ -83,11 +92,9 @@ def get_flight_data(key_input, gate_input_str, terminals_to_check, use_enc):
         t_code = terminal_options[t_name]
         
         params = {
-            "serviceKey": real_key, 
-            "type": "json",
-            "terminalId": t_code, 
-            "searchDate": today_str,
-            "numOfRows": "100", # 👈 [핵심] 300 -> 100으로 줄임 (서버 폭주 방지)
+            "serviceKey": real_key, "type": "json",
+            "terminalId": t_code, "searchDate": today_str,
+            "numOfRows": "100", # 100개로 제한 (500 에러 방지)
             "pageNo": "1"
         }
 
@@ -106,9 +113,9 @@ def get_flight_data(key_input, gate_input_str, terminals_to_check, use_enc):
                             item['terminal_name'] = t_name
                             all_flights.append(item)
             else:
-                error_msg = f"서버 에러({res.status_code}): {res.text[:100]}"
+                error_msg = f"서버 응답코드: {res.status_code}"
         except Exception as e:
-            error_msg = f"통신 에러: {e}"
+            error_msg = f"통신 오류: {e}"
 
         # [도착]
         try:
@@ -137,19 +144,17 @@ else:
     with st.spinner('데이터 조회 중...'):
         df, err = get_flight_data(api_key_input, gate_input, selected_terminals, use_encoding)
 
-    # 에러가 있으면 알려줌
     if err and df.empty:
-        st.error(f"데이터를 못 가져왔습니다. ({err})")
-        st.info("💡 사이드바에 있는 '데이터가 안 나오면 체크하세요' 박스를 눌러보세요.")
+        st.error(f"데이터 조회 실패 ({err})")
+        st.info("사이드바의 '데이터 안 나오면 체크' 박스를 눌러보세요.")
     
     elif df.empty:
-        st.info("조건에 맞는 운항 스케줄이 없습니다.")
+        st.info("현재 조건에 맞는 운항 스케줄이 없습니다.")
     else:
-        # 시간순 정렬
         if 'scheduleDateTime' in df.columns:
             df = df.sort_values(by='scheduleDateTime')
 
-        st.success(f"조회 성공: 총 {len(df)}건")
+        st.success(f"조회 성공: {len(df)}건")
 
         for index, row in df.iterrows():
             row_type = row.get('type', '출발')
@@ -167,9 +172,8 @@ else:
             raw_counter = row.get('chkinRange', '-')
             conv_counter = format_counter(raw_counter)
             
-            # 색상 로직
+            # 디자인 로직
             bg_color = "#ffffff"
-            text_color = "#333"
             bottom_info = ""
 
             if row_type == '도착':
@@ -177,10 +181,10 @@ else:
                 status_text = "도착"
                 bottom_info = f"수하물: {str(row.get('carousel', '-'))}"
             else:
-                bottom_info = f"Check-in: {conv_counter}"
                 status_text = remark
+                bottom_info = f"Check-in: {conv_counter}"
                 if "탑승" in remark: bg_color = "#d4edda"
-                elif "마감" in remark or "Final" in remark: bg_color = "#f8d7da"
+                elif "마감" in remark: bg_color = "#f8d7da"
                 elif "지연" in remark: bg_color = "#fff3cd"
                 elif "결항" in remark: bg_color = "#e2e3e5"
 
