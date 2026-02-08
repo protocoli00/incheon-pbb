@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import pandas as pd
 from urllib.parse import unquote
-from datetime import datetime
 
 # ==========================================
 # 1. 화면 기본 설정
@@ -25,7 +24,7 @@ with st.sidebar:
     terminal_options = {'T1': 'P01', '탑승동': 'P02', 'T2': 'P03'}
     selected_terminals = st.multiselect("구역 선택", list(terminal_options.keys()), default=list(terminal_options.keys()))
     
-    # 게이트 입력 (기본값을 빈칸으로 두었습니다)
+    # 게이트 입력 (기본값을 빈칸으로 둠 -> 전체 조회)
     st.subheader("담당 게이트")
     gate_input = st.text_input("번호 입력 (비워두면 전체 조회)", value="", placeholder="예: 10, 105 (비워두면 다 보입니다)")
     
@@ -33,7 +32,7 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================
-# 3. 데이터 가져오기 (핵심 로직)
+# 3. 데이터 가져오기
 # ==========================================
 def get_flight_data(key_input, gate_input_str, terminals_to_check):
     if not key_input: return pd.DataFrame()
@@ -41,8 +40,10 @@ def get_flight_data(key_input, gate_input_str, terminals_to_check):
     # 1. 키 보정
     real_key = unquote(key_input)
     
-    # 2. 게이트 번호 정리 (입력값이 없으면 빈 리스트가 됨)
-    target_gates = [g.strip() for g in gate_input_str.split(',') if g.strip()]
+    # 2. 게이트 번호 정리 (입력값이 없으면 빈 리스트)
+    target_gates = []
+    if gate_input_str.strip():
+        target_gates = [g.strip() for g in gate_input_str.split(',') if g.strip()]
     
     # 3. API 주소 설정
     base_url = "http://apis.data.go.kr/B551177/StatusOfFlights"
@@ -73,8 +74,9 @@ def get_flight_data(key_input, gate_input_str, terminals_to_check):
                 if items:
                     if not isinstance(items, list): items = [items]
                     for item in items:
-                        # [수정됨] 게이트 칸이 비어있거나(전체조회), 번호가 맞으면 추가
-                        if not target_gates or str(item.get('gate')) in target_gates:
+                        # 게이트가 비어있거나(전체), 번호가 일치하면 추가
+                        current_gate = str(item.get('gate', ''))
+                        if not target_gates or current_gate in target_gates:
                             item['type'] = '출발'
                             item['terminal_name'] = t_name
                             all_flights.append(item)
@@ -89,8 +91,9 @@ def get_flight_data(key_input, gate_input_str, terminals_to_check):
                 if items:
                     if not isinstance(items, list): items = [items]
                     for item in items:
-                        # [수정됨] 게이트 칸이 비어있거나(전체조회), 번호가 맞으면 추가
-                        if not target_gates or str(item.get('gate')) in target_gates:
+                        # 게이트가 비어있거나(전체), 번호가 일치하면 추가
+                        current_gate = str(item.get('gate', ''))
+                        if not target_gates or current_gate in target_gates:
                             item['type'] = '도착'
                             item['terminal_name'] = t_name
                             all_flights.append(item)
@@ -99,7 +102,7 @@ def get_flight_data(key_input, gate_input_str, terminals_to_check):
     return pd.DataFrame(all_flights) if all_flights else pd.DataFrame()
 
 # ==========================================
-# 4. 화면 출력 (디자인)
+# 4. 화면 출력
 # ==========================================
 if not api_key_input:
     st.warning("👈 사이드바에 API 키를 넣어주세요.")
@@ -109,8 +112,8 @@ else:
 
     if df.empty:
         st.info("데이터가 없습니다.")
-        st.write("- 아직 키 승인이 안 되었거나(1시간 소요)")
-        st.write("- 해당 시간대에 운항 스케줄이 없을 수 있습니다.")
+        st.write("- 키 승인 대기중 (1시간 소요)")
+        st.write("- 해당 시간대에 운항 스케줄 없음")
         
         # 확인용 링크
         real_key = unquote(api_key_input)
@@ -122,19 +125,77 @@ else:
         if 'scheduleDateTime' in df.columns:
             df = df.sort_values(by='scheduleDateTime')
 
-        # 타이틀 (필터링 여부 표시)
+        # 타이틀
+        count = len(df)
         if not gate_input.strip():
-            st.success(f"🔍 전체 조회 모드: 총 {len(df)}건")
+            st.success(f"🔍 전체 조회 모드: 총 {count}건")
         else:
-            st.success(f"🔍 게이트 {gate_input} 조회: 총 {len(df)}건")
+            st.success(f"🔍 게이트 {gate_input} 조회: 총 {count}건")
 
         for index, row in df.iterrows():
-            # 데이터 추출
+            # 데이터 추출 (에러 방지용 안전한 코드)
             row_type = row.get('type', '출발')
             gate = row.get('gate', '?')
             remark = row.get('remark', '예정')
             if not remark: remark = "예정"
             
-            # 시간 포맷
+            # 시간 포맷 (안전하게 분리)
             t_str = str(row.get('scheduleDateTime', ''))
-            f_time = f"{t_str
+            if len(t_str) >= 12:
+                # YYYYMMDDHHMM -> HH:MM
+                hour = t_str[8:10]
+                minute = t_str[10:12]
+                f_time = f"{hour}:{minute}"
+            else:
+                f_time = "미정"
+            
+            flight_no = row.get('flightId', '-')
+            airline = row.get('airline', '-')
+            airport = row.get('airport', '-') 
+            
+            # 색상 설정
+            bg_color = "#ffffff"
+            border_color = "#ddd"
+            icon = "✈️"
+            route_str = ""
+
+            if row_type == '도착':
+                bg_color = "#e7f5ff" # 파랑
+                border_color = "#004085"
+                icon = "🛬 IN"
+                route_str = f"출발: {airport}"
+            else:
+                route_str = f"목적: {airport}"
+                if "탑승" in remark:
+                    bg_color = "#d4edda" # 초록
+                    border_color = "#155724"
+                    icon = "🟢 OUT"
+                elif "마감" in remark:
+                    bg_color = "#f8d7da" # 빨강
+                    border_color = "#721c24"
+                    icon = "🔴 OUT"
+                elif "지연" in remark:
+                    bg_color = "#fff3cd" # 노랑
+                    border_color = "#856404"
+                    icon = "🟡 OUT"
+                else:
+                    icon = "🛫 OUT"
+
+            # HTML 생성 (문자열 끊김 방지)
+            html = f"""
+            <div style="padding: 15px; margin-bottom: 12px; border-radius: 12px; background-color: {bg_color}; border: 1px solid {border_color};">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 24px; font-weight: bold; color: #333;">{f_time}</span>
+                    <span style="font-size: 18px; font-weight: bold; color: #333;">{remark}</span>
+                </div>
+                <div style="font-size: 20px; font-weight: bold; margin-bottom: 5px;">
+                    <span style="background-color: #333; color: #fff; padding: 2px 8px; border-radius: 5px; font-size: 16px; margin-right: 5px;">G{gate}</span>
+                    {flight_no}
+                </div>
+                <div style="font-size: 15px; color: #555;">
+                    <b>{icon}</b> | {airline} <br>
+                    {route_str}
+                </div>
+            </div>
+            """
+            st.markdown(html, unsafe_allow_html=True)
