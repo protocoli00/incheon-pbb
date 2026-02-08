@@ -1,52 +1,69 @@
 import streamlit as st
 import requests
-import pandas as pd
 from urllib.parse import unquote
 
-st.title("🚨 에러 확인 모드")
+st.set_page_config(page_title="API 진단 키트", page_icon="🩺")
+st.title("🩺 API 연결 정밀 진단")
+st.info("선생님의 키가 어떤 문을 열 수 있는지 4가지 방법으로 테스트합니다.")
 
 # 1. 키 입력
-api_key_input = st.text_input("API 키를 입력하세요", type="password")
-real_key = unquote(api_key_input) if api_key_input else ""
+api_key_input = st.text_input("공공데이터포털 API 인증키를 입력하세요 (Encoding/Decoding 상관없음)", type="password")
 
-# 2. 테스트 시작 버튼
-if st.button("서버 연결 테스트 시작"):
-    if not real_key:
+if st.button("🚀 맞는 접속 방법 찾기 (클릭)"):
+    if not api_key_input:
         st.error("키를 입력해주세요!")
     else:
-        st.info("인천공항 서버에 신호를 보내는 중...")
-        
-        # 테스트용 URL (T1 출발편 조회)
-        url = "http://apis.data.go.kr/B551177/StatusOfPassengerFlightsOdp/getPassengerDeparturesOdp"
-        params = {
-            "serviceKey": real_key,
-            "type": "json",
-            "terminalId": "P01",
-            "numOfRows": "10",
-            "pageNo": "1"
+        # 테스트할 두 가지 API 주소 (상세 vs 일반)
+        urls = {
+            "A. [상세 조회 API] (StatusOfPassengerFlightsOdp)": "http://apis.data.go.kr/B551177/StatusOfPassengerFlightsOdp/getPassengerDeparturesOdp",
+            "B. [일반 조회 API] (StatusOfPassengerFlights)": "http://apis.data.go.kr/B551177/StatusOfPassengerFlights/getPassengerDepartures"
         }
         
-        try:
-            response = requests.get(url, params=params)
+        # 키 처리 방식 (디코딩 후 재인코딩)
+        # requests 라이브러리는 파라미터를 자동으로 인코딩하므로, 입력받은 키를 일단 디코딩해서 원본으로 만듦
+        real_key = unquote(api_key_input)
+        
+        success_found = False
+
+        for name, url in urls.items():
+            st.write(f"--- 📡 {name} 테스트 중 ---")
             
-            # 결과 화면에 출력
-            st.write("--- 서버 응답 내용 ---")
-            st.code(response.text) # 여기에 에러 메시지가 뜹니다
+            # 파라미터 설정
+            params = {
+                "serviceKey": real_key, # 여기서 자동으로 인코딩됨
+                "type": "json",
+                "terminalId": "P01", # T1
+                "numOfRows": "5",
+                "pageNo": "1"
+            }
             
-            # 에러 분석
-            if "SERVICE_KEY_IS_NOT_REGISTERED_ERROR" in response.text:
-                st.error("🔴 [원인] 키 등록 대기중")
-                st.warning("공공데이터포털에서 키를 발급받은 지 1시간이 안 지났습니다. 서버가 아직 키를 인식 못하고 있어요. 잠시 후 다시 시도하세요.")
-            elif "SERVICE_ACCESS_DENIED_ERROR" in response.text:
-                 st.error("🔴 [원인] 신청되지 않은 API")
-                 st.warning("활용 신청이 제대로 안 되었거나, '상세 조회' 서비스가 아닌 다른 API를 신청하신 것 같습니다.")
-            elif "LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR" in response.text:
-                 st.error("🔴 [원인] 트래픽 초과")
-            elif "response" in response.text and "body" in response.text:
-                st.success("🟢 [성공] 연결 성공! 데이터가 정상적으로 오고 있습니다.")
-                st.write("이제 원래 코드로 되돌리셔도 됩니다.")
-            else:
-                st.error("🔴 [원인] 기타 에러 (위의 영어 메시지를 확인하세요)")
+            try:
+                # 요청 보내기
+                response = requests.get(url, params=params, timeout=10)
                 
-        except Exception as e:
-            st.error(f"프로그램 에러: {e}")
+                # 결과 분석
+                if response.status_code == 200:
+                    data = response.text
+                    if "response" in data and "body" in data and "items" in data:
+                        st.success(f"✅ **성공! 선생님은 [{name}]를 신청하셨군요!**")
+                        st.json(response.json()['response']['body']['items'][0]) # 증거 데이터 보여줌
+                        success_found = True
+                        break # 성공했으니 멈춤
+                    elif "SERVICE_KEY_IS_NOT_REGISTERED_ERROR" in data:
+                        st.warning(f"⚠️ {name}: 키는 맞는데 아직 등록 대기중입니다 (1시간 뒤 재시도).")
+                    elif "Forbidden" in data or "SERVICE_ACCESS_DENIED_ERROR" in data:
+                        st.error(f"⛔ {name}: 이 API 권한이 없습니다. (신청 안 함)")
+                    else:
+                        st.warning(f"❓ {name}: 알 수 없는 응답 -> {data[:100]}")
+                else:
+                    st.error(f"❌ {name}: 서버 에러 (코드 {response.status_code})")
+                    
+            except Exception as e:
+                st.error(f"통신 오류: {e}")
+
+        if not success_found:
+            st.markdown("---")
+            st.error("😓 **모든 테스트 실패**")
+            st.write("1. 공공데이터포털에서 **'활용신청'**이 승인되었는지 확인해주세요.")
+            st.write("2. 신청하신 API 이름이 **'인천국제공항공사_여객기 운항 현황 상세 조회 서비스'**가 맞는지 확인해주세요.")
+            st.write("3. 신청 직후라면 **1시간 뒤**에 다시 해보세요.")
