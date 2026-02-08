@@ -6,7 +6,7 @@ from datetime import datetime
 import pytz # 한국 시간 계산용
 
 # ==========================================
-# 1. 화면 설정 & 시계
+# 1. 화면 설정 및 시계
 # ==========================================
 st.set_page_config(page_title="인천공항 현황", page_icon="🛫", layout="centered")
 
@@ -16,10 +16,10 @@ now_kst = datetime.now(KST)
 time_str = now_kst.strftime("%H:%M:%S")
 date_str = now_kst.strftime("%Y년 %m월 %d일")
 
-# 👇 요청하신 제목 적용
+# 👇 요청하신 제목 적용!
 st.title("🛫 인천공항 카운터 및 탑승교 정보")
 
-# 상단 시계 디자인
+# 상단 시계 디자인 (새로고침 기준 스냅샷)
 st.markdown(f"""
 <div style="
     text-align: center; 
@@ -52,7 +52,7 @@ with st.sidebar:
     terminal_options = {'T1': 'P01', '탑승동': 'P02', 'T2': 'P03'}
     selected_terminals = st.multiselect("구역", list(terminal_options.keys()), default=['T1'])
     
-    # 👇 [수정됨] 입력 라벨 변경 및 설명 추가
+    # 👇 [수정됨] 입력 메뉴 이름 변경 및 설명
     st.subheader("검색 필터")
     gate_input = st.text_input(
         "카운터 & 탑승Gate (쉼표 구분)", 
@@ -65,27 +65,26 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================
-# 3. 카운터 변환 및 매칭 함수 (핵심 로직)
+# 3. 카운터 변환 함수 (핵심 로직)
 # ==========================================
 def get_short_counter(text):
     """
-    H01-H18 -> H1
-    H19-H36 -> H2
-    값을 반환 (검색 매칭용)
+    데이터(H01-H18)를 받아서 짧은 이름(H1)으로 변환해주는 함수
+    (검색 매칭용)
     """
     if not text or text == "-" or text == "None": return None
     try:
-        start_code = text.split('-')[0].strip() # H05
+        start_code = text.split('-')[0].strip() # H05 추출
         alpha = start_code[0] # H
         number = int(start_code[1:]) # 5
         suffix = "1" if number <= 18 else "2"
-        return f"{alpha}{suffix}" # H1
+        return f"{alpha}{suffix}" # H1 반환
     except:
         return None
 
 def format_counter_display(text):
     """
-    화면 표시용: H1 -> H1 카운터
+    화면에 보여줄 때: H1 -> 'H1 카운터' 라고 붙여줌
     """
     short = get_short_counter(text)
     if short:
@@ -140,9 +139,9 @@ def get_flight_data(key_input, search_input_str, terminals_to_check, use_enc):
                         short_counter = get_short_counter(raw_counter) # 예: H1
                         
                         # 👇 [핵심] 하이브리드 필터링 로직
-                        # 검색어가 없으면(전체조회) -> 통과
-                        # 게이트 번호가 검색어에 있으면 -> 통과
-                        # 카운터 이름(H1)이 검색어에 있으면 -> 통과
+                        # 1. 검색어가 없으면 -> 무조건 통과 (전체조회)
+                        # 2. 게이트 번호(112)가 검색어에 있으면 -> 통과
+                        # 3. 카운터 이름(H1)이 검색어에 있으면 -> 통과
                         is_match = False
                         if not search_targets:
                             is_match = True
@@ -186,7 +185,7 @@ def get_flight_data(key_input, search_input_str, terminals_to_check, use_enc):
     return pd.DataFrame(all_flights), error_msg
 
 # ==========================================
-# 5. 화면 출력
+# 5. 화면 출력 (여기에 색상 로직이 있습니다!)
 # ==========================================
 if not api_key_input:
     st.warning("👈 사이드바에 인증키를 입력해주세요.")
@@ -222,22 +221,25 @@ else:
             raw_counter = row.get('chkinRange', '-')
             display_counter = format_counter_display(raw_counter)
             
-            # 디자인 로직
-            bg_color = "#ffffff"
+            # === 🎨 디자인/색상 결정 로직 ===
+            bg_color = "#ffffff" # 기본 흰색
             bottom_info = ""
 
             if row_type == '도착':
-                bg_color = "#cce5ff"
+                bg_color = "#cce5ff" # 🟦 파란색 (도착)
                 status_text = "도착"
                 bottom_info = f"수하물 수취대: {str(row.get('carousel', '-'))}"
             else:
                 status_text = remark
                 bottom_info = f"Check-in: {display_counter}"
-                if "탑승" in remark: bg_color = "#d4edda"
-                elif "마감" in remark: bg_color = "#f8d7da"
-                elif "지연" in remark: bg_color = "#fff3cd"
-                elif "결항" in remark: bg_color = "#e2e3e5"
+                
+                # 상태별 색상 변경
+                if "탑승" in remark: bg_color = "#d4edda"      # 🟩 초록색 (탑승중)
+                elif "마감" in remark: bg_color = "#f8d7da"    # 🟥 빨간색 (마감)
+                elif "지연" in remark: bg_color = "#fff3cd"    # 🟨 노란색 (지연)
+                elif "결항" in remark: bg_color = "#e2e3e5"    # ⬜ 회색 (결항)
 
+            # HTML 카드 출력
             st.markdown(f"""
             <div style="background-color:{bg_color}; padding:15px; margin-bottom:10px; border-radius:12px; border:1px solid #ddd; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                 <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
