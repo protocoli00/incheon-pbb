@@ -5,127 +5,141 @@ from urllib.parse import unquote
 from datetime import datetime
 
 # ==========================================
-# 1. 화면 기본 설정
+# 1. 화면 설정
 # ==========================================
-st.set_page_config(page_title="PBB 최종 해결", page_icon="✈️")
-st.title("✈️ PBB 항공기 운항 (날짜 포함)")
-st.caption("API 목록(getFlt...) + 오늘 날짜 자동 입력")
+st.set_page_config(page_title="PBB 에러 확인", page_icon="🚨")
+st.title("🚨 PBB 에러 정밀 확인")
+st.caption("End Point: statusOfAllFltDeOdp 적용됨")
 
 # ==========================================
 # 2. 사이드바
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 설정")
-    # 키 입력
     api_key_input = st.text_input("인증키 입력 (Decoding 권장)", type="password")
     
     # 터미널 선택
-    st.subheader("터미널")
     terminal_options = {'T1': 'P01', '탑승동': 'P02', 'T2': 'P03'}
     selected_terminals = st.multiselect("구역", list(terminal_options.keys()), default=list(terminal_options.keys()))
     
     # 게이트 입력
-    st.subheader("게이트")
-    gate_input = st.text_input("번호 (비워두면 전체)", value="")
+    gate_input = st.text_input("게이트 번호 (비워두면 전체)", value="")
     
-    if st.button("데이터 가져오기"):
+    if st.button("데이터 조회 시작"):
         st.rerun()
 
 # ==========================================
-# 3. 데이터 로직 (핵심)
+# 3. 데이터 로직
 # ==========================================
 def get_flight_data(key_input, gate_input_str, terminals_to_check):
-    if not key_input: return pd.DataFrame()
+    if not key_input: return pd.DataFrame(), ["키를 입력해주세요."]
 
-    real_key = unquote(key_input) # 키 보정
-    today_str = datetime.now().strftime("%Y%m%d") # 오늘 날짜 (예: 20260208)
+    real_key = unquote(key_input)
+    today_str = datetime.now().strftime("%Y%m%d") # 예: 20260208
     
     # 게이트 정리
     target_gates = []
     if gate_input_str.strip():
         target_gates = [g.strip() for g in gate_input_str.split(',') if g.strip()]
 
-    # 👇 [중요] 선생님이 주신 "API 목록"에 맞는 진짜 주소
-    base_url = "http://apis.data.go.kr/B551177/StatusOfFlights"
+    # 👇 [수정됨] 선생님이 알려주신 End Point + API 목록 조합
+    base_url = "http://apis.data.go.kr/B551177/statusOfAllFltDeOdp"
     url_dep = f"{base_url}/getFltDeparturesDeOdp" # 출발
     url_arr = f"{base_url}/getFltArrivalsDeOdp"   # 도착
     
     all_flights = []
+    error_logs = [] # 에러를 담을 그릇
 
     for t_name in terminals_to_check:
         t_code = terminal_options[t_name]
         
-        # 👇 [핵심] 날짜(searchDate)를 안 넣으면 에러가 날 수 있음!
+        # 파라미터 (날짜 포함)
         params = {
             "serviceKey": real_key,
             "type": "json",
-            "terminalId": t_code,
-            "searchDate": today_str, # 오늘 날짜 필수!
+            "terminalId": t_code,   # 설명서대로 terminalId 사용
+            "searchDate": today_str, # 날짜 필수
             "numOfRows": "100",
             "pageNo": "1"
         }
 
-        # --- [1] 출발 ---
+        # --- [1] 출발 요청 ---
         try:
-            res = requests.get(url_dep, params=params, timeout=5)
+            res = requests.get(url_dep, params=params, timeout=10)
             if res.status_code == 200:
-                data = res.json()
-                items = data.get('response', {}).get('body', {}).get('items')
-                if items:
-                    if not isinstance(items, list): items = [items]
-                    for item in items:
-                        current_gate = str(item.get('gate', ''))
-                        if not target_gates or current_gate in target_gates:
-                            item['type'] = '출발'
-                            item['terminal_name'] = t_name
-                            all_flights.append(item)
+                try:
+                    data = res.json()
+                    items = data['response']['body']['items']
+                    if items:
+                        if not isinstance(items, list): items = [items]
+                        for item in items:
+                            current_gate = str(item.get('gate', ''))
+                            if not target_gates or current_gate in target_gates:
+                                item['type'] = '출발'
+                                item['terminal_name'] = t_name
+                                all_flights.append(item)
+                except:
+                    # JSON 파싱 실패 시 (에러 메시지가 텍스트로 온 경우)
+                    error_logs.append(f"[{t_name} 출발 에러] {res.text[:300]}")
+            else:
+                error_logs.append(f"[{t_name} 출발 HTTP 에러] 상태코드: {res.status_code}")
+        except Exception as e:
+            error_logs.append(f"[{t_name} 출발 통신 에러] {e}")
+
+        # --- [2] 도착 요청 ---
+        try:
+            res = requests.get(url_arr, params=params, timeout=10)
+            if res.status_code == 200:
+                try:
+                    data = res.json()
+                    items = data['response']['body']['items']
+                    if items:
+                        if not isinstance(items, list): items = [items]
+                        for item in items:
+                            current_gate = str(item.get('gate', ''))
+                            if not target_gates or current_gate in target_gates:
+                                item['type'] = '도착'
+                                item['terminal_name'] = t_name
+                                all_flights.append(item)
+                except:
+                    pass # 도착 에러는 로그 생략 (화면 너무 복잡해짐)
         except: pass
 
-        # --- [2] 도착 ---
-        try:
-            res = requests.get(url_arr, params=params, timeout=5)
-            if res.status_code == 200:
-                data = res.json()
-                items = data.get('response', {}).get('body', {}).get('items')
-                if items:
-                    if not isinstance(items, list): items = [items]
-                    for item in items:
-                        current_gate = str(item.get('gate', ''))
-                        if not target_gates or current_gate in target_gates:
-                            item['type'] = '도착'
-                            item['terminal_name'] = t_name
-                            all_flights.append(item)
-        except: pass
-
-    return pd.DataFrame(all_flights) if all_flights else pd.DataFrame()
+    return pd.DataFrame(all_flights), error_logs
 
 # ==========================================
-# 4. 화면 출력
+# 4. 화면 출력 (에러명 보여주기 기능 추가)
 # ==========================================
 if not api_key_input:
     st.warning("👈 키를 입력하세요.")
 else:
-    with st.spinner('데이터 조회 중...'):
-        df = get_flight_data(api_key_input, gate_input, selected_terminals)
+    with st.spinner('서버와 통신 중...'):
+        df, errors = get_flight_data(api_key_input, gate_input, selected_terminals)
 
+    # 1. 에러가 있으면 가장 먼저 빨간색으로 보여줌
+    if errors:
+        st.error("🚨 서버에서 에러 메시지가 왔습니다!")
+        for err in errors:
+            st.code(err) # 에러명을 그대로 출력
+        st.markdown("---")
+
+    # 2. 데이터 출력
     if df.empty:
-        st.error("데이터가 없습니다.")
-        st.write("1. API 키가 아직 승인 대기 중일 수 있습니다. (1시간 소요)")
-        st.write("2. '활용신청'이 제대로 안 되었을 수 있습니다.")
-        
-        # 👇 진단 링크 (날짜 포함)
-        real_key = unquote(api_key_input)
-        today = datetime.now().strftime("%Y%m%d")
-        test_url = f"http://apis.data.go.kr/B551177/StatusOfFlights/getFltDeparturesDeOdp?serviceKey={real_key}&type=json&terminalId=P01&searchDate={today}&numOfRows=5&pageNo=1"
-        st.markdown(f"[👉 클릭해서 데이터 확인하기 (테스트 링크)]({test_url})")
-        
+        if not errors:
+            st.info("에러는 없지만 데이터가 비어있습니다.")
+            st.write("(게이트 번호를 비우고 전체 조회를 해보세요)")
+            
+            # 링크 테스트
+            real_key = unquote(api_key_input)
+            today = datetime.now().strftime("%Y%m%d")
+            test_url = f"http://apis.data.go.kr/B551177/statusOfAllFltDeOdp/getFltDeparturesDeOdp?serviceKey={real_key}&type=json&terminalId=P01&searchDate={today}&numOfRows=5&pageNo=1"
+            st.markdown(f"[👉 클릭해서 직접 확인하기]({test_url})")
     else:
         if 'scheduleDateTime' in df.columns:
             df = df.sort_values(by='scheduleDateTime')
 
         count = len(df)
-        msg = f"🔍 전체 조회: {count}건" if not gate_input.strip() else f"🔍 게이트 {gate_input}: {count}건"
-        st.success(msg)
+        st.success(f"✅ 데이터 수신 성공: 총 {count}건")
 
         for index, row in df.iterrows():
             row_type = row.get('type', '출발')
@@ -139,23 +153,12 @@ else:
             flight_no = row.get('flightId', '-')
             airline = row.get('airline', '-')
             
-            # 색상
             bg = "#e7f5ff" if row_type == '도착' else "#ffffff"
             icon = "🛬" if row_type == '도착' else "🛫"
-            if row_type == '출발' and "탑승" in remark: bg = "#d4edda"; icon = "🟢"
+            if "탑승" in remark: bg = "#d4edda"; icon = "🟢"
             
-            # HTML 출력
             st.markdown(f"""
-            <div style="padding:15px; margin-bottom:10px; border-radius:10px; background-color:{bg}; border:1px solid #ddd;">
-                <div style="font-weight:bold; font-size:18px; margin-bottom:5px;">
-                    {f_time} | {remark}
-                </div>
-                <div style="font-size:16px;">
-                    <span style="background:#333; color:white; padding:2px 6px; border-radius:4px;">G{gate}</span>
-                    {flight_no}
-                </div>
-                <div style="color:#555; font-size:14px; margin-top:5px;">
-                    {icon} {airline}
-                </div>
+            <div style="padding:15px; margin-bottom:10px; border-radius:10px; background-color:{bg}; border:1px solid #ccc;">
+                <b>{f_time}</b> | {icon} {remark} | G{gate} | {flight_no}
             </div>
             """, unsafe_allow_html=True)
